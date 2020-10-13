@@ -186,7 +186,7 @@ def put_template(es, name=None, mapping_name=None, body=None):
     return beg, end, retry_count, note
 
 
-def streaming_bulk(es, actions, errorsfp, logger, parallel=False):
+def streaming_bulk(es, actions, errorsfp, logger):
     """
     streaming_bulk(es, actions, errorsfp, logger)
 
@@ -197,6 +197,65 @@ def streaming_bulk(es, actions, errorsfp, logger, parallel=False):
         errorsfp - A file pointer for where to write 400 errors
         logger - A python logging object to use to report behaviors;
                  (the logger is expected to handle {} formatting)
+
+    Returns:
+
+        A tuple with the start and end times, the # of successfully indexed,
+        duplicate, and failed documents, along with number of times a bulk
+        request was retried.
+    """
+    return _internal_bulk(
+        es, actions, errorsfp, helpers.streaming_bulk, logger
+    )
+
+
+def parallel_bulk(
+        es, actions, errorsfp, logger, chunk_size=10000000,
+        max_chunk_bytes=104857600, thread_count=8, queue_size=4
+        ):
+    """
+    parallel_bulk(es, actions, errorsfp, logger, chunk_size=10000000,
+        max_chunk_bytes=104857600, thread_count=8, queue_size=4)
+
+    Arguments:
+
+        es - An Elasticsearch client object already constructed
+        actions - An iterable for the documents to be indexed
+        errorsfp - A file pointer for where to write 400 errors
+        logger - A python logging object to use to report behaviors;
+                 (the logger is expected to handle {} formatting)
+        chunk_size -
+        max_chunk_bytes -
+        thread_count -
+        queue_size -
+
+    Returns:
+
+        A tuple with the start and end times, the # of successfully indexed,
+        duplicate, and failed documents, along with number of times a bulk
+        request was retried.
+    """
+    return _internal_bulk(
+        es, actions, errorsfp, helpers.parallel_bulk, logger,
+        chunk_size=chunk_size, max_chunk_bytes=max_chunk_bytes,
+        thread_count=thread_count, queue_size=queue_size
+    )
+
+
+def _internal_bulk(es, actions, errorsfp, bulk_method, logger, **kwargs):
+    """
+    _internal_bulk(es, actions, errorsfp, bulk_method, logger, **kwargs)
+
+    Arguments:
+
+        es - An Elasticsearch client object already constructed
+        actions - An iterable for the documents to be indexed
+        errorsfp - A file pointer for where to write 400 errors
+        bulk_method - The `helpers.*` bulk indexing method, either streaming
+                      or parallel
+        logger - A python logging object to use to report behaviors;
+                 (the logger is expected to handle {} formatting)
+        **kwargs - Passed along to the given bulk_method
 
     Returns:
 
@@ -258,27 +317,14 @@ def streaming_bulk(es, actions, errorsfp, logger, parallel=False):
     # Create the generator that closes over the external generator, "actions"
     generator = actions_tracking_closure(actions)
 
-    if parallel:
-        logger.info("Using parallel bulk indexer")
-        streaming_bulk_generator = helpers.parallel_bulk(
-            es,
-            generator,
-            chunk_size=10000000,
-            max_chunk_bytes=104857600,
-            thread_count=8,
-            queue_size=4,
-            raise_on_error=False,
-            raise_on_exception=False,
-            request_timeout=_request_timeout)
-    else:
-        logger.info("Using streaming bulk indexer")
-        streaming_bulk_generator = helpers.streaming_bulk(
-            es,
-            generator,
-            raise_on_error=False,
-            raise_on_exception=False,
-            request_timeout=_request_timeout,
-        )
+    streaming_bulk_generator = bulk_method(
+        es,
+        generator,
+        raise_on_error=False,
+        raise_on_exception=False,
+        request_timeout=_request_timeout,
+        **kwargs
+    )
 
     for ok, resp_payload in streaming_bulk_generator:
         retry_count, action = actions_deque.popleft()
